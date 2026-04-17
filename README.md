@@ -1,6 +1,6 @@
 # Contacts REST API
 
-FastAPI + SQLAlchemy + PostgreSQL: CRUD для контактів, пошук (query), дні народження на найближчі 7 днів.
+FastAPI + SQLAlchemy + PostgreSQL: CRUD для контактів, пошук (query).
 
 ## Запуск
 
