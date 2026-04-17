@@ -1,4 +1,5 @@
 from datetime import date, timedelta
+from typing import List
 
 from fastapi import APIRouter, Depends, HTTPException, Query, status
 from sqlalchemy import select
@@ -6,8 +7,10 @@ from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session
 
 from app.database import get_db
+from app.models.user import User
 from app.models.contact import Contact
 from app.schemas.contact import ContactCreate, ContactRead, ContactUpdate
+from app.services.auth import get_current_user
 
 router = APIRouter()
 
@@ -30,7 +33,11 @@ def next_birthday_on_or_after(birthday: date, ref: date) -> date:
 
 
 @router.post("", response_model=ContactRead, status_code=status.HTTP_201_CREATED)
-def create_contact(payload: ContactCreate, db: Session = Depends(get_db)):
+def create_contact(
+    payload: ContactCreate,
+    current_user: User = Depends(get_current_user),
+    db: Session = Depends(get_db)
+):
     contact = Contact(
         first_name=payload.first_name,
         last_name=payload.last_name,
@@ -38,6 +45,7 @@ def create_contact(payload: ContactCreate, db: Session = Depends(get_db)):
         phone=payload.phone,
         birthday=payload.birthday,
         extra_data=payload.extra_data,
+        owner_id=current_user.id,
     )
     db.add(contact)
     try:
@@ -57,14 +65,16 @@ def create_contact(payload: ContactCreate, db: Session = Depends(get_db)):
     response_model=list[ContactRead],
     summary="Contacts with birthday in the next 7 days",
 )
-def list_upcoming_birthdays(db: Session = Depends(get_db)):
+def list_upcoming_birthdays(
+    current_user: User = Depends(get_current_user), db: Session = Depends(get_db)
+):
     """
     Returns contacts whose next birthday (month/day, ignoring birth year) falls on
     any calendar day from today through today + 7 days inclusive.
     """
     today = date.today()
     end = today + timedelta(days=7)
-    all_contacts = db.scalars(select(Contact)).all()
+    all_contacts = db.scalars(select(Contact).where(Contact.owner_id == current_user.id)).all()
     result: list[Contact] = []
     for c in all_contacts:
         nxt = next_birthday_on_or_after(c.birthday, today)
@@ -76,6 +86,7 @@ def list_upcoming_birthdays(db: Session = Depends(get_db)):
 
 @router.get("", response_model=list[ContactRead])
 def list_contacts(
+    current_user: User = Depends(get_current_user),
     db: Session = Depends(get_db),
     first_name: str | None = Query(None, description="Filter by first name (partial, case-insensitive)"),
     last_name: str | None = Query(None, description="Filter by last name (partial, case-insensitive)"),
@@ -83,7 +94,7 @@ def list_contacts(
     skip: int = Query(0, ge=0),
     limit: int = Query(100, ge=1, le=500),
 ):
-    stmt = select(Contact).order_by(Contact.id)
+    stmt = select(Contact).where(Contact.owner_id == current_user.id).order_by(Contact.id)
     if first_name is not None and first_name != "":
         stmt = stmt.where(Contact.first_name.ilike(f"%{first_name}%"))
     if last_name is not None and last_name != "":
@@ -95,16 +106,29 @@ def list_contacts(
 
 
 @router.get("/{contact_id}", response_model=ContactRead)
-def get_contact(contact_id: int, db: Session = Depends(get_db)):
-    contact = db.get(Contact, contact_id)
+def get_contact(
+    contact_id: int,
+    current_user: User = Depends(get_current_user),
+    db: Session = Depends(get_db),
+):
+    contact = db.scalar(
+        select(Contact).where(Contact.id == contact_id, Contact.owner_id == current_user.id)
+    )
     if contact is None:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Contact not found")
     return contact
 
 
 @router.patch("/{contact_id}", response_model=ContactRead)
-def update_contact(contact_id: int, payload: ContactUpdate, db: Session = Depends(get_db)):
-    contact = db.get(Contact, contact_id)
+def update_contact(
+    contact_id: int,
+    payload: ContactUpdate,
+    current_user: User = Depends(get_current_user),
+    db: Session = Depends(get_db),
+):
+    contact = db.scalar(
+        select(Contact).where(Contact.id == contact_id, Contact.owner_id == current_user.id)
+    )
     if contact is None:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Contact not found")
     data = payload.model_dump(exclude_unset=True)
@@ -125,8 +149,14 @@ def update_contact(contact_id: int, payload: ContactUpdate, db: Session = Depend
 
 
 @router.delete("/{contact_id}", status_code=status.HTTP_204_NO_CONTENT)
-def delete_contact(contact_id: int, db: Session = Depends(get_db)):
-    contact = db.get(Contact, contact_id)
+def delete_contact(
+    contact_id: int,
+    current_user: User = Depends(get_current_user),
+    db: Session = Depends(get_db),
+):
+    contact = db.scalar(
+        select(Contact).where(Contact.id == contact_id, Contact.owner_id == current_user.id)
+    )
     if contact is None:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Contact not found")
     db.delete(contact)
